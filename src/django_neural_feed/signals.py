@@ -33,7 +33,13 @@ def generate_content_embedding(sender, instance, created, **kwargs):
                 from .tasks import generate_content_embedding_task
 
                 model_path = f"{sender._meta.app_label}.{sender._meta.model_name}"
-                generate_content_embedding_task.delay(instance.id, model_path)  # type: ignore
+                # Defer dispatch until the surrounding transaction commits. A worker on
+                # a separate DB connection would otherwise run before the row is committed
+                # and fail with DoesNotExist. Mirrors the thread fallback below.
+                # (on_commit runs immediately when no transaction is active.)
+                transaction.on_commit(
+                    lambda: generate_content_embedding_task.delay(instance.id, model_path)  # type: ignore
+                )
                 return
             except Exception as celery_err:
                 logger.error(f"DNF Celery error, falling back to threads: {celery_err}")

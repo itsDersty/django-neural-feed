@@ -162,8 +162,8 @@ def _trigger_user_embedding_update(*, user_object, sender, feed_class):
 
             celery_task: Task = update_user_embedding_task  # type: ignore
             celery_task.delay(
-                likes_model_path=f"{sender._meta.app_label}.{sender._meta.model_name}",
-                users_model_path=f"{user_object.__class__._meta.app_label}.{user_object.__class__._meta.model_name}",
+                likes_django_model_path=f"{sender._meta.app_label}.{sender._meta.model_name}",
+                users_django_model_path=f"{user_object.__class__._meta.app_label}.{user_object.__class__._meta.model_name}",
                 user_id=user_object.id,
                 user_field_name=feed_class.user_field_name,
                 content_field_name=feed_class.content_field_name,

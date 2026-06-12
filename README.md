@@ -51,6 +51,17 @@ With its object-oriented architecture, DNF decouples your configuration logic in
 ```bash  
 pip install django-neural-feed
 ```
+
+The built-in `DefaultVectorEncoder` uses `sentence-transformers` (which pulls in
+torch). It is an **optional** extra, so install it only if you rely on the default
+local encoder:
+
+```bash
+pip install django-neural-feed[local]
+```
+
+If you configure a custom `ENCODER_CLASS` (OpenAI, Cohere, a hosted inference API,
+etc.) you can skip it and avoid the torch download entirely.
 ### **2. Add to Django Settings**
 
 ```python  

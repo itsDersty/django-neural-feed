@@ -1,6 +1,7 @@
 import numpy as np
 from django.db.models import F, Value
 from django.db.models.functions import Coalesce
+from django.db import connections, transaction
 from pgvector.django import MaxInnerProduct
 from typing import Literal
 
@@ -31,6 +32,8 @@ class BaseNeuralFeed:
 
     popularity_expression = app_settings.POPULARITY_EXPRESSION
     freshness_expression = app_settings.FRESHNESS_EXPRESSION
+
+    hnsw_config: dict = app_settings.HNSW
 
     _model_instances: dict = {}
 
@@ -198,10 +201,59 @@ class BaseNeuralFeed:
 
     @classmethod
     def get_feed(cls, user, queryset=None, excluded_ids=None, limit: int = 20):
+        """Get personalized feed for user."""
 
         candidates_qs = cls.get_candidates(user, queryset, excluded_ids)
 
         user_profile_vector = cls.get_user_vector(user)
+
+        hnsw = cls.get_setting("hnsw_config")
+
+        # multi-channel retrieval under HNSW mode
+        if hnsw and hnsw.get("ENABLED") and user_profile_vector:
+            from django.db import connections, transaction
+            
+            db_alias = candidates_qs.db
+            ef_search = hnsw.get("EF_SEARCH", 40)
+            search_pool = hnsw.get("SEARCH_POOL", 500)
+
+            w_sim = cls.get_setting("weight_similarity")
+            w_fresh = cls.get_setting("weight_freshness")
+            w_pop = cls.get_setting("weight_popularity")
+            total_w = w_sim + w_fresh + w_pop or 1.0
+
+            # proportions of the search pool
+            pool_sim = max(1, int(search_pool * (w_sim / total_w)))
+            pool_fresh = max(1, int(search_pool * (w_fresh / total_w)))
+            pool_pop = max(1, int(search_pool * (w_pop / total_w)))
+
+            candidate_ids = set()
+
+            # simmilarity channel
+            with transaction.atomic(using=db_alias):
+                with connections[db_alias].cursor() as cursor:
+                    cursor.execute("SET LOCAL hnsw.ef_search = %s;", [ef_search])
+                
+                knn_qs = candidates_qs.order_by(
+                    MaxInnerProduct("embedding", user_profile_vector)
+                )[:pool_sim]
+                candidate_ids.update(knn_qs.values_list("id", flat=True))
+
+            # freshness channel
+            if w_fresh > 0 and pool_fresh > 0:
+                fresh_qs = candidates_qs.annotate(
+                    f_val=cls.freshness_expression
+                ).order_by("-f_val")[:pool_fresh]
+                candidate_ids.update(fresh_qs.values_list("id", flat=True))
+
+            # popularity channel
+            if w_pop > 0 and pool_pop > 0:
+                pop_qs = candidates_qs.annotate(
+                    p_val=cls.popularity_expression
+                ).order_by("-p_val")[:pool_pop]
+                candidate_ids.update(pop_qs.values_list("id", flat=True))
+
+            candidates_qs = candidates_qs.filter(id__in=list(candidate_ids))
 
         ranked_qs = cls.rank_candidates(candidates_qs, user_profile_vector)
 

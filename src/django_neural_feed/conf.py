@@ -14,6 +14,13 @@ DEFAULT_CONFIG = {
     "CELERY_ENABLED": False,
     "ENCODER_CLASS": DefaultVectorEncoder,
     "FEEDS": [],
+
+    "HNSW": {
+        "ENABLED": False,
+        "M": 16,                  # Max connections per layer (default for pgvector)
+        "EF_CONSTRUCTION": 64,    # Size of the dynamic candidate list for construction
+        "OP_CLASS": "vector_cosine_ops", # Index type (cosine, l2, or inner_product)
+    }
 }
 
 
@@ -116,6 +123,13 @@ class AppSettings:
                 logger.error(f"DNF: Cannot import feed class from path '{path}': {e}")
 
         return feed_classes
+    
+    @property
+    def HNSW(self) -> dict:
+        """Returns merged HNSW configuration."""
+        user_hnsw = self._user_config.get("HNSW", {})
+        # Merge user keys with default fallbacks to prevent KeyError
+        return {**DEFAULT_CONFIG["HNSW"], **user_hnsw}
 
 
 # Global instantiation for direct import across the library ecosystem

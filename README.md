@@ -10,6 +10,9 @@
   <a href="https://pypi.org/project/django-neural-feed/">  
     <img src="https://img.shields.io/pypi/v/django-neural-feed?style=flat-square&color=blue" alt="PyPI Version">  
   </a>  
+  <a href="https://pepy.tech/projects/django-neural-feed">
+    <img src="https://static.pepy.tech/personalized-badge/django-neural-feed?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=BLUE&left_text=downloads" alt="PyPI Downloads">
+  </a>
   <a href="https://github.com/ItsDersty/django-neural-feed/blob/main/LICENSE">  
     <img src="https://img.shields.io/github/license/ItsDersty/django-neural-feed?style=flat-square&color=green" alt="License">  
   </a>  

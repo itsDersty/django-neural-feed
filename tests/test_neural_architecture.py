@@ -163,9 +163,10 @@ def test_feed_get_candidates_and_fallback():
     a3 = TestArticle.objects.create(title="Article 3")
 
     # 1. Fallback: User has no profile vector yet
-    # Should return recent items ordered by -id
+    # Should return most popular and fresh posts
     feed_items = TestParentFeed.get_feed(user=user, limit=2)
     assert len(feed_items) == 2
+    print(feed_items, a1 == feed_items[0], a2 == feed_items[0])
     assert feed_items[0] == a3
     assert feed_items[1] == a2
 
@@ -173,6 +174,8 @@ def test_feed_get_candidates_and_fallback():
     anon_feed = TestParentFeed.get_feed(user=None, limit=1)
     assert len(anon_feed) == 1
     assert anon_feed[0] == a3
+    """
+    """
 
     # 3. Excluded IDs logic
     # Assume user already saw a3 and a2

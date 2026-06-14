@@ -5,6 +5,7 @@ from django_neural_feed.mixins import NeuralRecommendMixin
 
 class TestArticle(NeuralRecommendMixin, models.Model):
     title = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
     embedding = VectorField(dimensions=3, null=True, blank=True)
 
     def get_ready_text(self) -> str:

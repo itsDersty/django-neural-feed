@@ -55,9 +55,6 @@ dev = [
     "celery>=5.3.0",
     "sentence-transformers>=3.0.0",
 ]
-local = [
-    "sentence-transformers>=3.0.0",
-]
 
 [tool.setuptools.packages.find]
 where = ["src"]

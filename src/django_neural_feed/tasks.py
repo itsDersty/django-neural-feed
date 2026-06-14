@@ -38,8 +38,13 @@ def generate_content_embedding_task(
                 embedding_model_name = app_settings.MODEL_NAME
             # Using the dynamic encoder from app settings
             encoder = app_settings.ENCODER_CLASS
-            instance.embedding = encoder.text_to_vector(text_to_vectorize, embedding_model_name)  # type: ignore
-            instance.save(update_fields=["embedding"])
+            vector = encoder.text_to_vector(text_to_vectorize, embedding_model_name)  # type: ignore
+            # text_to_vector returns [] for blank-after-strip or failed encodes; never
+            # persist an empty vector (pgvector rejects 0-dim). Mirrors the guard in
+            # update_user_embedding_task.
+            if vector:
+                instance.embedding = vector
+                instance.save(update_fields=["embedding"])
 
     except Exception as e:
         logger.error(f"DNF Celery Error - content embedding generation failed: {e}")

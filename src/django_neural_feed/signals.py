@@ -201,10 +201,14 @@ def _run_synchronous_content_update(*, model_class, instance_id):
         if text_to_vectorize:
             encoder = app_settings.ENCODER_CLASS
 
-            instance.embedding = encoder.text_to_vector(
+            vector = encoder.text_to_vector(
                 text_to_vectorize, app_settings.MODEL_NAME
             )
-            instance.save(update_fields=["embedding"])
+            # text_to_vector returns [] for blank-after-strip or failed encodes; never
+            # persist an empty vector (pgvector rejects 0-dim).
+            if vector:
+                instance.embedding = vector
+                instance.save(update_fields=["embedding"])
     except Exception:
         logger.exception("DNF synchronous content update error:")
         raise

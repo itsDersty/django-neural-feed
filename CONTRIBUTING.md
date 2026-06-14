@@ -1,16 +1,17 @@
 # Contributing to django-neural-feed
 
-First off, thank you for considering contributing to django-neural-feed! It's people like you that make django-neural-feed a great library for the community.
+First off, thank you for considering contributing to django-neural-feed! It's people like you who make django-neural-feed a great library for the community.
 
 ## 1. Branching Strategy
 
-django-neural-feed uses short-lived feature and fix branches with `main` as the release branch:
+django-neural-feed follows a standard development workflow with `dev` as the main integration branch and `main` as the stable release branch:
 
-- **`main`**: Production-ready code. Releases are cut from here.
-- **`feature/*`**: Focused feature branches.
-- **`fix/*`** or **`hotfix/*`**: Focused bug-fix branches.
+- **`dev`**: The active development branch. All new features, optimizations, and standard bug fixes should target this branch.
+- **`main`**: Production-ready code. Stable releases and PyPI tags are cut exclusively from here.
 
-Branch from `main` unless a maintainer asks you to target another branch.
+### How to cut your branches:
+* **Features, Improvements, and Bug Fixes:** Always branch from `dev` and open your Pull Request against `dev`.
+* **Hotfixes:** Only branch from `main` if you are fixing a critical production vulnerability that cannot wait for the next release cycle.
 
 ## 2. Development Setup
 

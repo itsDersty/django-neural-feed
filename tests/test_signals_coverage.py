@@ -655,3 +655,34 @@ def test_run_synchronous_content_update_empty_text():
         mock_instance.save.assert_not_called()
         # Ensure connection.close() in finally block was still executed
         mock_conn.close.assert_called_once()
+
+
+def test_run_synchronous_content_update_empty_vector():
+    """Covers line when text_to_vectorize is valid but vector returns empty."""
+    from django_neural_feed.signals import _run_synchronous_content_update
+    from unittest.mock import MagicMock, patch
+
+    mock_model = MagicMock()
+    mock_instance = MagicMock()
+
+    # Text exists but it might be whitespace-only
+    mock_instance.get_ready_text.return_value = "   "
+    mock_model.objects.get.return_value = mock_instance
+
+    with (
+        patch("django_neural_feed.signals.app_settings") as mock_settings,
+        patch("django_neural_feed.signals.connection") as mock_conn,
+    ):
+        # Mock encoder to return empty list (simulating failed/blank encode)
+        mock_encoder = MagicMock()
+        mock_encoder.text_to_vector.return_value = []
+        mock_settings.ENCODER_CLASS = mock_encoder
+
+        _run_synchronous_content_update(model_class=mock_model, instance_id=1)
+
+        # Ensure encoder was called but save was skipped due to empty vector
+        mock_encoder.text_to_vector.assert_called_once_with(
+            "   ", mock_settings.MODEL_NAME
+        )
+        mock_instance.save.assert_not_called()
+        mock_conn.close.assert_called_once()

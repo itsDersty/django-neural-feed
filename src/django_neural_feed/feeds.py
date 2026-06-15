@@ -202,20 +202,26 @@ class BaseNeuralFeed:
     @classmethod
     def get_feed(cls, user, queryset=None, excluded_ids=None, limit: int = 20):
         """Get personalized feed for user."""
-
-        candidates_qs = cls.get_candidates(user, queryset, excluded_ids)
-
+        hnsw = cls.get_setting("hnsw_config")
         user_profile_vector = cls.get_user_vector(user)
 
-        hnsw = cls.get_setting("hnsw_config")
+        using_hnsw = bool(
+            hnsw and hnsw.get("ENABLED") and user_profile_vector is not None
+        )
+
+        candidates_qs = cls.get_candidates(
+            user, queryset, None if using_hnsw else excluded_ids
+        )
 
         # multi-channel retrieval under HNSW mode
-        if hnsw and hnsw.get("ENABLED") and user_profile_vector:
+        if using_hnsw:
             from django.db import connections, transaction
-            
+
             db_alias = candidates_qs.db
             ef_search = hnsw.get("EF_SEARCH", 40)
-            search_pool = hnsw.get("SEARCH_POOL", 500)
+            base_search_pool = hnsw.get("SEARCH_POOL", 500)
+            excluded_count = len(excluded_ids) if excluded_ids else 0
+            search_pool = base_search_pool + excluded_count
 
             w_sim = cls.get_setting("weight_similarity")
             w_fresh = cls.get_setting("weight_freshness")
@@ -230,14 +236,15 @@ class BaseNeuralFeed:
             candidate_ids = set()
 
             # simmilarity channel
-            with transaction.atomic(using=db_alias):
-                with connections[db_alias].cursor() as cursor:
-                    cursor.execute("SET LOCAL hnsw.ef_search = %s;", [ef_search])
-                
-                knn_qs = candidates_qs.order_by(
-                    MaxInnerProduct("embedding", user_profile_vector)
-                )[:pool_sim]
-                candidate_ids.update(knn_qs.values_list("id", flat=True))
+            if w_sim > 0 and pool_sim > 0:
+                with transaction.atomic(using=db_alias):
+                    with connections[db_alias].cursor() as cursor:
+                        cursor.execute("SET LOCAL hnsw.ef_search = %s;", [ef_search])
+
+                    knn_qs = candidates_qs.order_by(
+                        MaxInnerProduct("embedding", user_profile_vector)
+                    )[:pool_sim]
+                    candidate_ids.update(knn_qs.values_list("id", flat=True))
 
             # freshness channel
             if w_fresh > 0 and pool_fresh > 0:
@@ -252,6 +259,10 @@ class BaseNeuralFeed:
                     p_val=cls.popularity_expression
                 ).order_by("-p_val")[:pool_pop]
                 candidate_ids.update(pop_qs.values_list("id", flat=True))
+
+            # Drop excluded items in memory before fetching objects
+            if excluded_ids:
+                candidate_ids.difference_update(excluded_ids)
 
             candidates_qs = candidates_qs.filter(id__in=list(candidate_ids))
 

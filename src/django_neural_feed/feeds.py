@@ -1,5 +1,5 @@
 import numpy as np
-from django.db.models import F, Value
+from django.db.models import F, Value, FloatField
 from django.db.models.functions import Coalesce
 from django.db import connections, transaction
 from pgvector.django import MaxInnerProduct
@@ -183,18 +183,26 @@ class BaseNeuralFeed:
 
     @classmethod
     def rank_candidates(cls, queryset, user_profile_vector):
+        if user_profile_vector is not None:
+            queryset = queryset.annotate(
+                similarity=Coalesce(
+                    -MaxInnerProduct("embedding", user_profile_vector), Value(0.0)
+                ),
+            )
+        else:
+            queryset = queryset.annotate(
+                similarity=Value(0.0, output_field=FloatField())
+            )
+
         queryset = queryset.annotate(
-            similarity=Coalesce(
-                -MaxInnerProduct("embedding", user_profile_vector), Value(0.0)
-            ),
-            popularity=Coalesce(cls.popularity_expression, Value(0.0)),
-            freshness=Coalesce(cls.freshness_expression, Value(0.0)),
+            popularity=Coalesce(cls.get_setting("popularity_expression"), Value(0.0)),
+            freshness=Coalesce(cls.get_setting("freshness_expression"), Value(0.0)),
         )
 
         queryset = queryset.annotate(
-            score=cls.weight_similarity * F("similarity")
-            + cls.weight_freshness * F("freshness")
-            + cls.weight_popularity * F("popularity")
+            score=cls.get_setting("weight_similarity") * F("similarity")
+            + cls.get_setting("weight_freshness") * F("freshness")
+            + cls.get_setting("weight_popularity") * F("popularity")
         ).order_by("-score")
 
         return queryset
@@ -249,14 +257,14 @@ class BaseNeuralFeed:
             # freshness channel
             if w_fresh > 0 and pool_fresh > 0:
                 fresh_qs = candidates_qs.annotate(
-                    f_val=cls.freshness_expression
+                    f_val=cls.get_setting("freshness_expression")
                 ).order_by("-f_val")[:pool_fresh]
                 candidate_ids.update(fresh_qs.values_list("id", flat=True))
 
             # popularity channel
             if w_pop > 0 and pool_pop > 0:
                 pop_qs = candidates_qs.annotate(
-                    p_val=cls.popularity_expression
+                    p_val=cls.get_setting("popularity_expression")
                 ).order_by("-p_val")[:pool_pop]
                 candidate_ids.update(pop_qs.values_list("id", flat=True))
 

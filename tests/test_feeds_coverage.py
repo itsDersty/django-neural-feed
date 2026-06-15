@@ -182,7 +182,9 @@ def test_get_feed_hnsw_enabled_multi_channel():
     user = User.objects.create_user(username="hnsw_multi_user")
     UserFeedProfile.objects.create(user_id=user.id, feed_id="hnsw_multi_feed", embedding=[1.0, 0.0, 0.0])  # type: ignore
 
-    TestArticle.objects.create(title="Vector Match", embedding=[1.0, 0.0, 0.0])
+    article_one = TestArticle.objects.create(
+        title="Vector Match", embedding=[1.0, 0.0, 0.0]
+    )
     TestArticle.objects.create(title="Fresh Match", embedding=[0.0, 1.0, 0.0])
 
     db_alias = TestArticle.objects.all().db
@@ -207,10 +209,83 @@ def test_get_feed_hnsw_enabled_multi_channel():
 
     with patch.object(connections[db_alias], "cursor", side_effect=safe_cursor_proxy):
         feed = HNSWMultiChannelFeed.get_feed(user=user, limit=10)
+        feed2 = HNSWMultiChannelFeed.get_feed(user=user, limit=10, excluded_ids=[article_one.id])  # type: ignore
 
         # Verify our HNSW config block was actually reached
         assert hnsw_query_called is True
         assert len(feed) <= 2
+        assert len(feed2) <= 1
+
+
+@pytest.mark.django_db
+def test_get_feed_hnsw_disabled_sim_channel():
+    """Covers HNSW multi-channel retrieval branch without simmilarity channel active."""
+    from django.contrib.auth import get_user_model
+    from django.db import connections
+    from django.db.models import Value
+    from django_neural_feed.models import UserFeedProfile
+    from tests.models import TestArticle
+    from unittest.mock import patch
+
+    class HNSWMultiChannelFeed(BaseNeuralFeed):
+        popularity_expression = Value(1.0)
+        freshness_expression = Value(1.0)
+
+        @classmethod
+        def get_setting(cls, attr_name: str):
+            if attr_name == "content_django_model":
+                return TestArticle
+            if attr_name == "feed_id":
+                return "hnsw_multi_feed"
+            if attr_name == "hnsw_config":
+                return {"ENABLED": True, "EF_SEARCH": 80, "SEARCH_POOL": 300}
+            if attr_name == "weight_similarity":
+                return 0.0
+            if attr_name == "weight_freshness":
+                return 0.5
+            if attr_name == "weight_popularity":
+                return 0.5
+            return super().get_setting(attr_name)
+
+    User = get_user_model()
+    user = User.objects.create_user(username="hnsw_multi_user")
+    UserFeedProfile.objects.create(user_id=user.id, feed_id="hnsw_multi_feed", embedding=[1.0, 0.0, 0.0])  # type: ignore
+
+    article_one = TestArticle.objects.create(
+        title="Vector Match", embedding=[1.0, 0.0, 0.0]
+    )
+    TestArticle.objects.create(title="Fresh Match", embedding=[0.0, 1.0, 0.0])
+
+    db_alias = TestArticle.objects.all().db
+    real_cursor_getter = connections[db_alias].cursor
+    hnsw_query_called = False
+
+    # Safe cursor wrapper to intercept only the SET LOCAL command
+    def safe_cursor_proxy():
+        cursor = real_cursor_getter()
+        real_execute = cursor.execute
+
+        def patched_execute(sql, params=None):
+            nonlocal hnsw_query_called
+            if "SET LOCAL hnsw.ef_search" in sql:
+                hnsw_query_called = True
+                assert params == [80]
+                return None  # Skip raw HNSW setup to avoid crashes on non-pgvector DBs
+            return real_execute(sql, params)
+
+        cursor.execute = patched_execute
+        return cursor
+
+    with patch.object(connections[db_alias], "cursor", side_effect=safe_cursor_proxy):
+        feed = HNSWMultiChannelFeed.get_feed(user=user, limit=10)
+        feed2 = HNSWMultiChannelFeed.get_feed(user=user, limit=10, excluded_ids=[article_one.id])  # type: ignore
+
+        # Verify our HNSW config block was actually reached
+        assert (
+            hnsw_query_called is False
+        )  # hnsw query shouldn't run because weight_simmilarity is zero.
+        assert len(feed) <= 2
+        assert len(feed2) <= 1
 
 
 @pytest.mark.django_db

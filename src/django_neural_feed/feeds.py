@@ -39,12 +39,12 @@ class BaseNeuralFeed:
 
     @classmethod
     def get_setting(cls, attr_name: str):
-        """
-        Settings getter with fallback to parent_feed before the base class defaults.
-        """
-        if attr_name in cls.__dict__:
-            return getattr(cls, attr_name)
+        # Look for attribute in the class MRO dynamic chain
+        for base in cls.__mro__:
+            if attr_name in base.__dict__:
+                return getattr(cls, attr_name)
 
+        # Fallback to parent feed structure
         if cls.parent_feed is not None:
             return cls.parent_feed.get_setting(attr_name)
 
@@ -244,7 +244,7 @@ class BaseNeuralFeed:
             candidate_ids = set()
 
             # simmilarity channel
-            if w_sim > 0 and pool_sim > 0:
+            if w_sim > 0:
                 with transaction.atomic(using=db_alias):
                     with connections[db_alias].cursor() as cursor:
                         cursor.execute("SET LOCAL hnsw.ef_search = %s;", [ef_search])
@@ -255,14 +255,14 @@ class BaseNeuralFeed:
                     candidate_ids.update(knn_qs.values_list("id", flat=True))
 
             # freshness channel
-            if w_fresh > 0 and pool_fresh > 0:
+            if w_fresh > 0:
                 fresh_qs = candidates_qs.annotate(
                     f_val=cls.get_setting("freshness_expression")
                 ).order_by("-f_val")[:pool_fresh]
                 candidate_ids.update(fresh_qs.values_list("id", flat=True))
 
             # popularity channel
-            if w_pop > 0 and pool_pop > 0:
+            if w_pop > 0:
                 pop_qs = candidates_qs.annotate(
                     p_val=cls.get_setting("popularity_expression")
                 ).order_by("-p_val")[:pool_pop]

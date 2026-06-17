@@ -39,13 +39,10 @@ class BaseNeuralFeed:
 
     @classmethod
     def get_setting(cls, attr_name: str):
-        # Look for attribute in the class MRO dynamic chain
-        for base in cls.__mro__:
-            if attr_name in base.__dict__:
-                return getattr(cls, attr_name)
+        if attr_name in cls.__dict__:
+            return cls.__dict__[attr_name]
 
-        # Fallback to parent feed structure
-        if cls.parent_feed is not None:
+        if cls.parent_feed is not None and hasattr(cls.parent_feed, attr_name):
             return cls.parent_feed.get_setting(attr_name)
 
         return getattr(cls, attr_name)
@@ -208,7 +205,14 @@ class BaseNeuralFeed:
         return queryset
 
     @classmethod
-    def get_feed(cls, user, queryset=None, excluded_ids=None, limit: int = 20):
+    def get_feed(
+        cls,
+        user,
+        queryset=None,
+        excluded_ids=None,
+        limit: int = 20,
+        excluded_queryset=None,
+    ):
         """Get personalized feed for user."""
         hnsw = cls.get_setting("hnsw_config")
         user_profile_vector = cls.get_user_vector(user)
@@ -217,9 +221,12 @@ class BaseNeuralFeed:
             hnsw and hnsw.get("ENABLED") and user_profile_vector is not None
         )
 
-        candidates_qs = cls.get_candidates(
-            user, queryset, None if using_hnsw else excluded_ids
-        )
+        candidates_qs = cls.get_candidates(user, queryset, None)
+
+        if excluded_queryset is not None:
+            candidates_qs = candidates_qs.exclude(pk__in=excluded_queryset.values("pk"))
+        elif excluded_ids:
+            candidates_qs = candidates_qs.exclude(pk__in=excluded_ids)
 
         # multi-channel retrieval under HNSW mode
         if using_hnsw:
@@ -227,9 +234,7 @@ class BaseNeuralFeed:
 
             db_alias = candidates_qs.db
             ef_search = hnsw.get("EF_SEARCH", 40)
-            base_search_pool = hnsw.get("SEARCH_POOL", 500)
-            excluded_count = len(excluded_ids) if excluded_ids else 0
-            search_pool = base_search_pool + excluded_count
+            search_pool = hnsw.get("SEARCH_POOL", 500)
 
             w_sim = cls.get_setting("weight_similarity")
             w_fresh = cls.get_setting("weight_freshness")
@@ -267,10 +272,6 @@ class BaseNeuralFeed:
                     p_val=cls.get_setting("popularity_expression")
                 ).order_by("-p_val")[:pool_pop]
                 candidate_ids.update(pop_qs.values_list("id", flat=True))
-
-            # Drop excluded items in memory before fetching objects
-            if excluded_ids:
-                candidate_ids.difference_update(excluded_ids)
 
             candidates_qs = candidates_qs.filter(id__in=list(candidate_ids))
 

@@ -409,6 +409,57 @@ def test_get_feed_hnsw_disabled_fallback_flow():
         assert len(feed) == 1
 
 
+def test_get_setting_non_existent_no_parent():
+    """Covers the jump branch when attr handles missing field with no parent feed."""
+    with pytest.raises(AttributeError):
+        BaseNeuralFeed.get_setting("completely_non_existent_and_invalid_attr")
+
+
+def test_get_setting_fallback_to_parent_feed():
+    """Covers recursive resolution when attribute is found in parent_feed."""
+    from django_neural_feed.feeds import BaseNeuralFeed
+
+    class ParentFeed(BaseNeuralFeed):
+        custom_test_setting = "parent_value"
+
+    class ChildFeed(BaseNeuralFeed):
+        parent_feed = ParentFeed
+        # Do not define custom_test_setting here to force fallback
+
+    # Trigger resolution from ChildFeed, which must bubble up to ParentFeed
+    resolved_value = ChildFeed.get_setting("custom_test_setting")
+
+    assert resolved_value == "parent_value"
+
+
+@pytest.mark.django_db
+def test_get_feed_hnsw_garbage_and_excluded_queryset():
+    """Covers hnsw non-dict fallback and excluded_queryset branch in get_feed."""
+    from django.contrib.auth import get_user_model
+    from tests.models import TestArticle
+
+    class EdgeCaseFeed(BaseNeuralFeed):
+        feed_id = "edge_case_feed"
+        content_django_model = TestArticle
+        hnsw_config = None  # Triggers the else block for non-dict hnsw #type: ignore
+
+    User = get_user_model()
+    user = User.objects.create_user(username="feed_edge_user")
+
+    art1 = TestArticle.objects.create(title="Excluded Art", embedding=[0.1, 0.1, 0.0])
+    art2 = TestArticle.objects.create(title="Included Art", embedding=[0.2, 0.2, 0.0])
+
+    # Filter queryset to pass into excluded_queryset parameter
+    excluded_qs = TestArticle.objects.filter(id=art1.id)  # type: ignore
+
+    # Execute feed generation with excluded_queryset parameter
+    feed = EdgeCaseFeed.get_feed(user=user, excluded_queryset=excluded_qs)
+
+    # Verify exclusion logic worked flawlessly
+    feed_ids = [item.id for item in feed]
+    assert art1.id not in feed_ids  # type: ignore
+
+
 def test_calculate_embedding_resolves_encoder_and_model():
     """Covers calculate_embedding by overriding the ENCODER_CLASS property via class level patch."""
 

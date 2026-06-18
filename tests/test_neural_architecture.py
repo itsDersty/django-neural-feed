@@ -30,6 +30,24 @@ from django_neural_feed.tasks import (
 User = get_user_model()
 
 
+def test_hnsw_fallback_when_user_passes_garbage():
+    """Covers the line where user_hnsw is not a dict and falls back to empty dict."""
+    from django_neural_feed.conf import AppSettings
+    from django.conf import settings
+
+    # Simulate user passing garbage (e.g., a string instead of a dict)
+    bad_config = {"HNSW": "not_a_dict_garbage"}
+
+    with patch.object(settings, "DJANGO_NEURAL_FEED", bad_config):
+        settings_proxy = AppSettings()
+        hnsw_res = settings_proxy.HNSW
+
+        # Verify it falls back to default config keys cleanly
+        assert hnsw_res["ENABLED"] is False
+        assert hnsw_res["M"] == 16
+        assert hnsw_res["EF_CONSTRUCTION"] == 64
+
+
 @pytest.mark.django_db(transaction=True)
 def test_content_embedding_trigger():
     """Checks that creating content triggers embedding generation."""
@@ -684,6 +702,59 @@ def test_update_user_embedding_task_skip_empty_vector_flow(mock_get_model, monke
         assert mock_update_skip.call_count == 1
         mock_update_skip.assert_called_once_with(
             user_id=1, feed_id="test_feed", defaults={"embedding": None}
+        )
+
+
+def test_update_user_embedding_task_fallback_zero_norm_branch():
+    """
+    Covers the branch jump where feed is not found, vector has zero norm,
+    and it bypasses normalization but keeps the truthy falsy check.
+    """
+
+    mock_likes_model = MagicMock()
+    mock_user_model = MagicMock()
+
+    # Ensure user exists to pass the initial check
+    mock_user_model.objects.filter.return_value.exists.return_value = True
+
+    # Return some mock data from DB so list isn't completely empty
+    mock_likes_model.objects.filter.return_value.order_by.return_value.__getitem__.return_value.values_list.return_value = [
+        [0.0, 0.0]
+    ]
+
+    with (
+        patch("django_neural_feed.tasks.get_model_from_path") as mock_get_model,
+        patch("django_neural_feed.tasks.app_settings") as mock_settings,
+        patch("django_neural_feed.models.UserFeedProfile.objects") as mock_profile_objs,
+    ):
+        # Setup model resolution
+        mock_get_model.side_effect = lambda path: {
+            "app.Likes": mock_likes_model,
+            "app.User": mock_user_model,
+        }.get(path)
+
+        # Force no registered feeds to trigger the fallback else block
+        mock_settings.get_registered_feeds.return_value = []
+
+        # Force average_vectors to return a zero vector (norm will be 0.0)
+        mock_settings.ENCODER_CLASS.average_vectors.return_value = [0.0, 0.0]
+
+        # Execute task with an unregistered feed_id
+        update_user_embedding_task(
+            likes_django_model_path="app.Likes",
+            users_django_model_path="app.User",
+            user_id=42,
+            user_field_name="user",
+            content_field_name="content",
+            feed_id="unregistered_garbage_feed",
+            user_likes_limit=5,
+        )
+
+        # Verify it passed through without crashing and saved the fallback vector
+        mock_profile_objs.update_or_create.assert_called_once_with(
+            user_id=42,
+            feed_id="unregistered_garbage_feed",
+            defaults={"embedding": [0.0, 0.0]},
         )
 
 

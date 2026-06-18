@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "USER_LIKES_LIMIT": 20,
     "CELERY_ENABLED": False,
     "ENCODER_CLASS": DefaultVectorEncoder,
+    "FRESHNESS_EXPRESSION": Value(1.0),
+    "POPULARITY_EXPRESSION": Value(1.0),
     "FEEDS": [],
     "HNSW": {
         "ENABLED": False,

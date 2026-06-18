@@ -161,23 +161,24 @@ def _trigger_user_embedding_update(*, user_object, sender, feed_class):
 
     if app_settings.CELERY_ENABLED:
         try:
-            from celery import Task
+            from typing import cast
+            from celery.app.task import Task
             from .tasks import update_user_embedding_task
 
-            celery_task: Task = update_user_embedding_task  # type: ignore
-            celery_task.delay(
-                likes_django_model_path=f"{sender._meta.app_label}.{sender._meta.model_name}",
-                users_django_model_path=f"{user_object.__class__._meta.app_label}.{user_object.__class__._meta.model_name}",
-                user_id=user_object.id,
-                user_field_name=feed_class.user_field_name,
-                content_field_name=feed_class.content_field_name,
-                feed_id=target_feed_id,
-                user_likes_limit=feed_class.user_likes_limit,
+            celery_task = cast(Task, update_user_embedding_task)
+
+            # Wrap in on_commit to prevent race conditions with workers
+            transaction.on_commit(
+                lambda: celery_task.delay(
+                    user_id=user_object.id,
+                    feed_id=target_feed_id,
+                )
             )
             return
         except Exception as celery_err:
             logger.error(f"DNF Celery error: {celery_err}")
 
+    # Fallback thread if Celery is disabled or failed
     transaction.on_commit(
         lambda: threading.Thread(
             target=_run_synchronous_user_update,

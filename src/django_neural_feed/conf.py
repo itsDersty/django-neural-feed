@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
         "ENABLED": False,
         "M": 16,  # Max connections per layer (default for pgvector)
         "EF_CONSTRUCTION": 64,  # Size of the dynamic candidate list for construction
-        "OP_CLASS": "inner_product",  # Index type (cosine, l2, or inner_product)
+        # "OP_CLASS": "inner_product",  # Index type (cosine, l2, or inner_product) |||| Reserved for future updates
     },
 }
 
@@ -127,7 +127,8 @@ class AppSettings:
     def HNSW(self) -> dict:
         """Returns merged HNSW configuration."""
         user_hnsw = self._user_config.get("HNSW", {})
-        # Merge user keys with default fallbacks to prevent KeyError
+        if not isinstance(user_hnsw, dict):
+            user_hnsw = {}  # Fallback to empty dict if user passed garbage
         return {**DEFAULT_CONFIG["HNSW"], **user_hnsw}
 
 

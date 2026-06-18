@@ -33,14 +33,19 @@ class BaseNeuralFeed:
     popularity_expression = app_settings.POPULARITY_EXPRESSION
     freshness_expression = app_settings.FRESHNESS_EXPRESSION
 
-    hnsw_config: dict = app_settings.HNSW
+    hnsw_config: dict = (
+        {k.lower(): v for k, v in app_settings.HNSW.items()}
+        if isinstance(app_settings.HNSW, dict)
+        else {}
+    )
 
     _model_instances: dict = {}
 
     @classmethod
     def get_setting(cls, attr_name: str):
-        if attr_name in cls.__dict__:
-            return cls.__dict__[attr_name]
+        for base in cls.__mro__:
+            if attr_name in base.__dict__:
+                return getattr(cls, attr_name)
 
         if cls.parent_feed is not None and hasattr(cls.parent_feed, attr_name):
             return cls.parent_feed.get_setting(attr_name)
@@ -56,19 +61,20 @@ class BaseNeuralFeed:
         return embedding
 
     @classmethod
-    def calculate_user_embedding(
-        cls, likes_queryset, content_field_name: str | None = None
-    ) -> list[float] | None:
+    def calculate_user_embedding(cls, likes_queryset) -> list[float] | None:
+        """
+        Extracts embeddings from the queryset, averages, and normalizes them.
+        """
         limit = cls.get_setting("user_likes_limit")
-        prefix = f"{content_field_name}__" if content_field_name else ""
+        c_field = cls.get_setting("content_field_name")
+        prefix = f"{c_field}__" if c_field else ""
 
         filter_kwargs = {f"{prefix}embedding__isnull": False}
-        values_field = f"{prefix}embedding"
-
+        
         recent_emb = list(
             likes_queryset.filter(**filter_kwargs)
             .order_by("-id")[:limit]
-            .values_list(values_field, flat=True)
+            .values_list(f"{prefix}embedding", flat=True)
         )
 
         if not recent_emb:
@@ -77,6 +83,7 @@ class BaseNeuralFeed:
         vectors_array = np.asarray(recent_emb, dtype=np.float32)
         mean_vector = np.mean(vectors_array, axis=0)
 
+        # Strict length normalization
         norm = np.linalg.norm(mean_vector)
         if norm > 0:
             mean_vector = mean_vector / norm
@@ -86,8 +93,7 @@ class BaseNeuralFeed:
     @classmethod
     def get_user_vector(cls, user) -> list[float] | None:
         """
-        Retrieves the averaged interaction vector for a specific user
-        scoped to this particular feed instance.
+        Retrieves user vector, falling back to parent feed if needed.
         """
         if user is None or not user.is_authenticated:
             return None
@@ -102,7 +108,14 @@ class BaseNeuralFeed:
                 user_id=user.id, feed_id=target_feed_id
             ).first()
 
-            return profile.embedding if profile else None
+            if profile and profile.embedding is not None:
+                return profile.embedding
+
+            # Check parent feed if current profile lacks an embedding
+            if cls.parent_feed is not None:
+                return cls.parent_feed.get_user_vector(user)
+
+            return None
 
         except Exception as e:
             logger.error(
@@ -215,26 +228,33 @@ class BaseNeuralFeed:
     ):
         """Get personalized feed for user."""
         hnsw = cls.get_setting("hnsw_config")
+
+        # Normalize dict keys to lowercase to avoid case-sensitivity issues
+        if isinstance(hnsw, dict):
+            hnsw = {k.lower(): v for k, v in hnsw.items()}
+        else:
+            hnsw = {}
+
         user_profile_vector = cls.get_user_vector(user)
 
         using_hnsw = bool(
-            hnsw and hnsw.get("ENABLED") and user_profile_vector is not None
+            hnsw and hnsw.get("enabled") and user_profile_vector is not None
         )
 
         candidates_qs = cls.get_candidates(user, queryset, None)
 
         if excluded_queryset is not None:
-            candidates_qs = candidates_qs.exclude(pk__in=excluded_queryset.values("pk"))
+            candidates_qs = candidates_qs.exclude(
+                pk__in=excluded_queryset.values_list("pk", flat=True)
+            )
         elif excluded_ids:
             candidates_qs = candidates_qs.exclude(pk__in=excluded_ids)
 
         # multi-channel retrieval under HNSW mode
         if using_hnsw:
-            from django.db import connections, transaction
-
             db_alias = candidates_qs.db
-            ef_search = hnsw.get("EF_SEARCH", 40)
-            search_pool = hnsw.get("SEARCH_POOL", 500)
+            ef_search = hnsw.get("ef_search", 40)
+            search_pool = hnsw.get("search_pool", 500)
 
             w_sim = cls.get_setting("weight_similarity")
             w_fresh = cls.get_setting("weight_freshness")

@@ -597,7 +597,7 @@ def test_run_synchronous_content_update_all_branches():
 
 
 def test_run_synchronous_user_update_falsy_vector():
-    """Covers line 232->239 branch when vector is empty or None."""
+    """Covers branch when vector is empty or None."""
     from django_neural_feed.signals import _run_synchronous_user_update
 
     mock_feed = MagicMock()
@@ -606,6 +606,10 @@ def test_run_synchronous_user_update_falsy_vector():
         "content_field_name": "content",
         "user_likes_limit": 3,
     }.get(key)
+
+    # Explicitly mock calculate_user_embedding to return None
+    # so the 'if not vector:' condition evaluates to True
+    mock_feed.calculate_user_embedding.return_value = None
 
     mock_model = MagicMock()
     mock_model.objects.filter.return_value.order_by.return_value.__getitem__.return_value.values_list.return_value = [
@@ -617,7 +621,7 @@ def test_run_synchronous_user_update_falsy_vector():
         patch("django_neural_feed.models.UserFeedProfile.objects") as mock_profile_objs,
     ):
 
-        # Force average_vectors to return None to bypass update_or_create block
+        # Keep this for backward compatibility if encoder is still called inside
         mock_settings.ENCODER_CLASS.average_vectors.return_value = None
 
         _run_synchronous_user_update(
@@ -626,7 +630,8 @@ def test_run_synchronous_user_update_falsy_vector():
             feed_class=mock_feed,
             feed_id="test_feed",
         )
-        # Ensure it explicitly saves None to database to wipe the profile
+
+        # Now it will explicitly check the branch and pass
         mock_profile_objs.update_or_create.assert_called_once_with(
             user_id=42, feed_id="test_feed", defaults={"embedding": None}
         )

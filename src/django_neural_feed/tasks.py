@@ -63,34 +63,53 @@ def update_user_embedding_task(
         if likes_django_model is None or user_django_model is None:
             return
 
-        # Verify user still exists to avoid orphaned data if deleted recently
         if not user_django_model.objects.filter(id=user_id).exists():
             return
 
         from django_neural_feed.models import UserFeedProfile
+        from django_neural_feed.conf import app_settings
+        import numpy as np
 
-        prefix = f"{content_field_name}__" if content_field_name else ""
-        filter_kwargs = {
-            f"{user_field_name}_id": user_id,
-            f"{prefix}embedding__isnull": False,
-        }
+        # Find corresponding feed class dynamically
+        feed_class = None
+        for cls in app_settings.get_registered_feeds():
+            if getattr(cls, "feed_id", None) == feed_id:
+                feed_class = cls
+                break
 
-        recent_emb = list(
-            likes_django_model.objects.filter(**filter_kwargs)
-            .order_by("-id")[:user_likes_limit]
-            .values_list(f"{prefix}embedding", flat=True)
-        )
+        if feed_class is not None:
+            user_queryset = likes_django_model.objects.filter(
+                **{f"{user_field_name}_id": user_id}
+            )
+            vector = feed_class.calculate_user_embedding(user_queryset)
+        else:
+            # Fallback layer matching identical math behavior
+            prefix = f"{content_field_name}__" if content_field_name else ""
+            filter_kwargs = {
+                f"{user_field_name}_id": user_id,
+                f"{prefix}embedding__isnull": False,
+            }
 
-        # Generate average vector using the configured encoder
-        encoder = app_settings.ENCODER_CLASS
-        vector = encoder.average_vectors(recent_emb, user_likes_limit)
+            recent_emb = list(
+                likes_django_model.objects.filter(**filter_kwargs)
+                .order_by("-id")[:user_likes_limit]
+                .values_list(f"{prefix}embedding", flat=True)
+            )
 
-        # If vector is empty (user has 0 likes), we either clear the profile or set it to None
+            encoder = app_settings.ENCODER_CLASS
+            vector = encoder.average_vectors(recent_emb, user_likes_limit)
+
+            if vector:
+                matrix = np.array(vector, dtype=np.float32)
+                norm = np.linalg.norm(matrix)
+                if norm > 0:
+                    vector = (matrix / norm).tolist()
+
         if not vector:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": None}
             )
-        else:  # If vector is not empty, we do main job
+        else:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": vector}
             )

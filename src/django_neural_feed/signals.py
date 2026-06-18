@@ -157,9 +157,7 @@ def _user_like_changed_m2m(
 
 def _trigger_user_embedding_update(*, user_object, sender, feed_class):
     """Routes the update to Celery or a background thread."""
-    target_feed_id = (
-        feed_class.parent_feed.feed_id if feed_class.parent_feed else feed_class.feed_id
-    )
+    target_feed_id = feed_class.get_setting("feed_id")
 
     if app_settings.CELERY_ENABLED:
         try:
@@ -201,9 +199,7 @@ def _run_synchronous_content_update(*, model_class, instance_id):
         if text_to_vectorize:
             encoder = app_settings.ENCODER_CLASS
 
-            vector = encoder.text_to_vector(
-                text_to_vectorize, app_settings.MODEL_NAME
-            )
+            vector = encoder.text_to_vector(text_to_vectorize, app_settings.MODEL_NAME)
             # text_to_vector returns [] for blank-after-strip or failed encodes; never
             # persist an empty vector (pgvector rejects 0-dim).
             if vector:
@@ -220,29 +216,19 @@ def _run_synchronous_user_update(*, user_id, sender_model, feed_class, feed_id):
     try:
         from django_neural_feed.models import UserFeedProfile
 
-        encoder = app_settings.ENCODER_CLASS
-
         u_field = feed_class.get_setting("user_field_name")
-        c_field = feed_class.get_setting("content_field_name")
-        limit = feed_class.get_setting("user_likes_limit")
 
-        prefix = f"{c_field}__" if c_field else ""
-        filter_kwargs = {f"{u_field}_id": user_id, f"{prefix}embedding__isnull": False}
+        # Prepare base queryset filtered by user
+        user_queryset = sender_model.objects.filter(**{f"{u_field}_id": user_id})
 
-        recent_emb = list(
-            sender_model.objects.filter(**filter_kwargs)
-            .order_by("-id")[:limit]
-            .values_list(f"{prefix}embedding", flat=True)
-        )
+        # Everything else is handled by the feed class method
+        vector = feed_class.calculate_user_embedding(user_queryset)
 
-        vector = encoder.average_vectors(recent_emb, limit)
-
-        # If vector is empty (user has 0 likes), we either clear the profile or set it to None
         if not vector:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": None}
             )
-        else:  # If vector is not empty, we doing main job
+        else:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": vector}
             )

@@ -169,7 +169,7 @@ def test_get_feed_hnsw_enabled_multi_channel():
             if attr_name == "feed_id":
                 return "hnsw_multi_feed"
             if attr_name == "hnsw_config":
-                return {"ENABLED": True, "EF_SEARCH": 80, "SEARCH_POOL": 300}
+                return {"enabled": True, "ef_search": 80, "search_pool": 300}
             if attr_name == "weight_similarity":
                 return 0.6
             if attr_name == "weight_freshness":
@@ -238,7 +238,7 @@ def test_get_feed_hnsw_disabled_sim_channel():
             if attr_name == "feed_id":
                 return "hnsw_multi_feed"
             if attr_name == "hnsw_config":
-                return {"ENABLED": True, "EF_SEARCH": 80, "SEARCH_POOL": 300}
+                return {"enabled": True, "ef_search": 80, "search_pool": 300}
             if attr_name == "weight_similarity":
                 return 0.0
             if attr_name == "weight_freshness":

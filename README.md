@@ -45,7 +45,6 @@ With its object-oriented architecture, DNF decouples your configuration logic in
 - **PostgreSQL**: 12+ (with `pgvector` extension installed)  
 - **NumPy**: 2.0.0+  
 - **pgvector**: 0.4.0+  
-- **SentenceTransformers**: 3.0.0+
 
 ## Installation
 

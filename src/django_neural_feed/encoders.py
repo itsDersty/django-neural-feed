@@ -55,7 +55,12 @@ class DefaultVectorEncoder(BaseVectorEncoder):
                         model_name, local_files_only=False
                     )
             except ImportError:
-                logger.error("DNF Error: 'sentence-transformers' package is missing.")
+                logger.error(
+                    "DNF Error: 'sentence-transformers' is required for the built-in "
+                    "DefaultVectorEncoder but is not installed. Install it with "
+                    "`pip install django-neural-feed[local]`, or configure a custom "
+                    "ENCODER_CLASS that does not need it."
+                )
                 raise
         return cls._model_instances[model_name]
 

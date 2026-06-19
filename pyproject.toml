@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-neural-feed"
-version = "1.0.2"
+version = "1.1.0"
 authors = [
     { name = "itsDersty" }
 ]
@@ -32,10 +32,15 @@ dependencies = [
     "Django>=4.2",
     "numpy>=2.0.0",
     "pgvector>=0.4.0",
-    "sentence-transformers>=3.0.0",
 ]
 
 [project.optional-dependencies]
+# Only needed for the built-in DefaultVectorEncoder (in-process sentence-transformers,
+# which pulls in torch). Skip it when configuring a custom ENCODER_CLASS (OpenAI,
+# Cohere, a hosted inference API, etc.): pip install django-neural-feed[local]
+local = [
+    "sentence-transformers>=3.0.0",
+]
 celery = [
     "celery>=5.3.0",
 ]
@@ -48,6 +53,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "psycopg2-binary>=2.9.0",
     "celery>=5.3.0",
+    "sentence-transformers>=3.0.0",
 ]
 
 [tool.setuptools.packages.find]

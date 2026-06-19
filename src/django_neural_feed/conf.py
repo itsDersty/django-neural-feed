@@ -13,7 +13,14 @@ DEFAULT_CONFIG = {
     "USER_LIKES_LIMIT": 20,
     "CELERY_ENABLED": False,
     "ENCODER_CLASS": DefaultVectorEncoder,
+    "FRESHNESS_EXPRESSION": Value(1.0),
+    "POPULARITY_EXPRESSION": Value(1.0),
     "FEEDS": [],
+    "HNSW": {
+        "ENABLED": False,
+        "EF_SEARCH": 40,
+        "SEARCH_POOL": 500,
+    },
 }
 
 
@@ -116,6 +123,14 @@ class AppSettings:
                 logger.error(f"DNF: Cannot import feed class from path '{path}': {e}")
 
         return feed_classes
+
+    @property
+    def HNSW(self) -> dict:
+        """Returns merged HNSW configuration."""
+        user_hnsw = self._user_config.get("HNSW", {})
+        if not isinstance(user_hnsw, dict):
+            user_hnsw = {}  # Fallback to empty dict if user passed garbage
+        return {**DEFAULT_CONFIG["HNSW"], **user_hnsw}
 
 
 # Global instantiation for direct import across the library ecosystem

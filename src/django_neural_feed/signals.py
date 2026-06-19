@@ -157,29 +157,28 @@ def _user_like_changed_m2m(
 
 def _trigger_user_embedding_update(*, user_object, sender, feed_class):
     """Routes the update to Celery or a background thread."""
-    target_feed_id = (
-        feed_class.parent_feed.feed_id if feed_class.parent_feed else feed_class.feed_id
-    )
+    target_feed_id = feed_class.get_setting("feed_id")
 
     if app_settings.CELERY_ENABLED:
         try:
-            from celery import Task
+            from typing import cast
+            from celery.app.task import Task
             from .tasks import update_user_embedding_task
 
-            celery_task: Task = update_user_embedding_task  # type: ignore
-            celery_task.delay(
-                likes_django_model_path=f"{sender._meta.app_label}.{sender._meta.model_name}",
-                users_django_model_path=f"{user_object.__class__._meta.app_label}.{user_object.__class__._meta.model_name}",
-                user_id=user_object.id,
-                user_field_name=feed_class.user_field_name,
-                content_field_name=feed_class.content_field_name,
-                feed_id=target_feed_id,
-                user_likes_limit=feed_class.user_likes_limit,
+            celery_task = cast(Task, update_user_embedding_task)
+
+            # Wrap in on_commit to prevent race conditions with workers
+            transaction.on_commit(
+                lambda: celery_task.delay(
+                    user_id=user_object.id,
+                    feed_id=target_feed_id,
+                )
             )
             return
         except Exception as celery_err:
             logger.error(f"DNF Celery error: {celery_err}")
 
+    # Fallback thread if Celery is disabled or failed
     transaction.on_commit(
         lambda: threading.Thread(
             target=_run_synchronous_user_update,
@@ -201,10 +200,12 @@ def _run_synchronous_content_update(*, model_class, instance_id):
         if text_to_vectorize:
             encoder = app_settings.ENCODER_CLASS
 
-            instance.embedding = encoder.text_to_vector(
-                text_to_vectorize, app_settings.MODEL_NAME
-            )
-            instance.save(update_fields=["embedding"])
+            vector = encoder.text_to_vector(text_to_vectorize, app_settings.MODEL_NAME)
+            # text_to_vector returns [] for blank-after-strip or failed encodes; never
+            # persist an empty vector (pgvector rejects 0-dim).
+            if vector:
+                instance.embedding = vector
+                instance.save(update_fields=["embedding"])
     except Exception:
         logger.exception("DNF synchronous content update error:")
         raise
@@ -216,29 +217,19 @@ def _run_synchronous_user_update(*, user_id, sender_model, feed_class, feed_id):
     try:
         from django_neural_feed.models import UserFeedProfile
 
-        encoder = app_settings.ENCODER_CLASS
-
         u_field = feed_class.get_setting("user_field_name")
-        c_field = feed_class.get_setting("content_field_name")
-        limit = feed_class.get_setting("user_likes_limit")
 
-        prefix = f"{c_field}__" if c_field else ""
-        filter_kwargs = {f"{u_field}_id": user_id, f"{prefix}embedding__isnull": False}
+        # Prepare base queryset filtered by user
+        user_queryset = sender_model.objects.filter(**{f"{u_field}_id": user_id})
 
-        recent_emb = list(
-            sender_model.objects.filter(**filter_kwargs)
-            .order_by("-id")[:limit]
-            .values_list(f"{prefix}embedding", flat=True)
-        )
+        # Everything else is handled by the feed class method
+        vector = feed_class.calculate_user_embedding(user_queryset)
 
-        vector = encoder.average_vectors(recent_emb, limit)
-
-        # If vector is empty (user has 0 likes), we either clear the profile or set it to None
         if not vector:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": None}
             )
-        else:  # If vector is not empty, we doing main job
+        else:
             UserFeedProfile.objects.update_or_create(
                 user_id=user_id, feed_id=feed_id, defaults={"embedding": vector}
             )

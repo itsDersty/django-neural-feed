@@ -10,6 +10,9 @@
   <a href="https://pypi.org/project/django-neural-feed/">  
     <img src="https://img.shields.io/pypi/v/django-neural-feed?style=flat-square&color=blue" alt="PyPI Version">  
   </a>  
+  <a href="https://pepy.tech/projects/django-neural-feed">
+    <img src="https://static.pepy.tech/personalized-badge/django-neural-feed?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=BLUE&left_text=downloads" alt="PyPI Downloads">
+  </a>
   <a href="https://github.com/ItsDersty/django-neural-feed/blob/main/LICENSE">  
     <img src="https://img.shields.io/github/license/ItsDersty/django-neural-feed?style=flat-square&color=green" alt="License">  
   </a>  
@@ -51,11 +54,23 @@ With its object-oriented architecture, DNF decouples your configuration logic in
 ```bash  
 pip install django-neural-feed
 ```
-### **2. Add to Django Settings**
 
-```python  
-INSTALLED_APPS = [  
-    # ... other apps  
+The built-in `DefaultVectorEncoder` uses `sentence-transformers` (which pulls in
+torch). It is an **optional** extra, so install it only if you rely on the default
+local encoder:
+
+```bash
+pip install django-neural-feed[local]
+```
+
+If you configure a custom `ENCODER_CLASS` (OpenAI, Cohere, a hosted inference API,
+etc.) you can skip it and avoid the torch download entirely.
+### **2. Add to Django Settings**
+To ensure Django's migration engine can cleanly generate and compile PostgreSQL-specific vector indices, make sure to add both django.contrib.postgres and django_neural_feed to your settings:
+
+```python
+INSTALLED_APPS = [    
+    'django.contrib.postgres', # Required for robust PG index migration compilation  
     'django_neural_feed',  
 ]
 ```
@@ -183,6 +198,76 @@ def user_feed_view(request):
     return feed_queryset
 ```
 
+## **Enabling High-Performance HNSW Indexing**
+
+To scale beyond ~10k+ items, you must build an Approximate Nearest Neighbor (ANN) index in PostgreSQL. Enabling HNSW reduces query times from ~100ms+ to **<1ms** by bypassing expensive sequential scans.
+
+### **Step 1: Set Up your Django Model with HNSW Mixin**
+
+Inherit from NeuralHnswMixin in your content model. To resolve meta-class conflicts cleanly in static type checkers (like Pylance/Mypy), explicitly merge the internal Meta classes:
+
+```python
+from django.conf import settings  
+from django.db import models  
+from django_neural_feed.mixins import NeuralRecommendMixin, NeuralHnswMixin
+
+class Post(NeuralRecommendMixin, models.Model):  
+    title = models.CharField(max_length=255)  
+    content = models.TextField()  
+    created_at = models.DateTimeField(auto_now_add=True)  
+    likes = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_posts")
+
+    def get_ready_text(self) -> str:  
+        return f"{self.title} {self.content}"
+
+    # Explicitly inherit Meta options to merge the dynamic HNSW index  
+    class Meta(NeuralRecommendMixin.Meta, NeuralHnswMixin.Meta):  
+        pass
+```
+
+### **Step 2: Turn on HNSW in Settings**
+
+Configure the HNSW runtime parameters inside your settings.py. DNF will automatically run SET LOCAL hnsw.ef_search on incoming queries to tune search precision dynamically.
+
+```python
+DJANGO_NEURAL_FEED = {  
+    "FEEDS": [  
+        "your_app.feeds.PostFeed",  
+    ],  
+    "HNSW": {  
+        "ENABLED": True,        # Toggles HNSW-optimized query isolation  
+        "EF_SEARCH": 40,        # Size of the dynamic candidate list during query phase  
+        "SEARCH_POOL": 500,     # Pre-retrieval pool size divided between similarity/freshness/popularity  
+    }  
+}
+```
+### **Step 3: Compile the Database Graph**
+
+Run the migrations to physically construct the HNSW index on your database server.
+```bash
+python manage.py makemigrations  
+python manage.py migrate
+```
+
+*Note: Generating a vector index on large datasets consumes substantial system resources. Expect your CPU usage to spike up to 100%+ during migrate execution while Postgres builds the graph layers.*
+
+### **Step 4: Verify HNSW is Running**
+
+Ensure your queries are actually utilizing the newly built index. Run a database analysis via Django Shell:
+
+```python
+# python manage.py shell  
+from your_app.feeds import PostFeed  
+from your_app.models import Post  
+from django.contrib.auth import get_user_model
+
+user = get_user_model().objects.first()  
+# Analyze query execution structure  
+print(PostFeed.get_feed(user=user, limit=20).explain(analyze=True))
+```
+
+If configured correctly, the execution log will output an **Index Scan using ..._hnsw_idx** instead of a Seq Scan (Sequential scan).
+
 ### **Configuration Reference**
 
 You can pass default global limits and model engine backends via standard DJANGO_NEURAL_FEED dictionary keys in your settings.py:
@@ -195,6 +280,11 @@ DJANGO_NEURAL_FEED = {
     "WEIGHT_SIMILARITY": 0.6,    
     "WEIGHT_FRESHNESS": 0.2,    
     "WEIGHT_POPULARITY": 0.2,    
+    "HNSW": {  
+        "ENABLED": True,  
+        "EF_SEARCH": 40,  
+        "SEARCH_POOL": 500,  
+    },
 }
 ```
 
@@ -216,7 +306,7 @@ Every specific attribute can be declared dynamically within your custom BaseNeur
 | Feed Class Attribute | Type | Default Value / Fallback | Purpose |
 | :---- | :---- | :---- | :---- |
 | feed_id | str | "default_feed" | Unique identifier for partitioning user vector profiles. |
-| mode | str | *Required* ("m2m" | "model") | Toggles the internal signal tracking pipeline architecture. |
+| mode | str | *Required* ("m2m" / "model") | Toggles the internal signal tracking pipeline architecture. |
 | embedding_model_name | str | settings.MODEL_NAME | Overrides the text-embedding engine for this specific feed. |
 | user_likes_limit | int | settings.USER_LIKES_LIMIT | Overrides the history interaction slice size for this feed. |
 | weight_similarity | float | settings.WEIGHT_SIMILARITY | Fine-tunes semantic similarity importance for this feed. |

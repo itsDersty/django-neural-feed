@@ -3,6 +3,7 @@ from celery import shared_task
 from django.apps import apps
 from django.db.models import Model
 from django_neural_feed.conf import app_settings
+from django_neural_feed.models import UserFeedProfile
 
 logger = logging.getLogger(__name__)
 
@@ -46,54 +47,39 @@ def generate_content_embedding_task(
 
 
 @shared_task
-def update_user_embedding_task(
-    likes_django_model_path,
-    users_django_model_path,
-    user_id,
-    user_field_name,
-    content_field_name,
-    feed_id,
-    user_likes_limit,
-):
+def update_user_embedding_task(user_id, feed_id):
     """Asynchronously recalculates the user profile vector for a specific feed."""
     try:
-        likes_django_model = get_model_from_path(likes_django_model_path)
-        user_django_model = get_model_from_path(users_django_model_path)
+        feed_class = None
+        for cls in app_settings.get_registered_feeds():
+            if getattr(cls, "feed_id", None) == feed_id:
+                feed_class = cls
+                break
 
-        if likes_django_model is None or user_django_model is None:
+        if not feed_class:
+            logger.error(
+                f"DNF Celery Error - Feed class with id '{feed_id}' not found."
+            )
             return
 
-        # Verify user still exists to avoid orphaned data if deleted recently
-        if not user_django_model.objects.filter(id=user_id).exists():
+        # Dynamically fetch current configuration from the feed class
+        likes_model = feed_class.get_setting("interaction_django_model")
+        user_field = feed_class.get_setting("user_field_name")
+
+        if not likes_model:
             return
 
-        from django_neural_feed.models import UserFeedProfile
+        if isinstance(likes_model, str):
+            likes_model = get_model_from_path(likes_model)
+            if not likes_model:
+                return
 
-        prefix = f"{content_field_name}__" if content_field_name else ""
-        filter_kwargs = {
-            f"{user_field_name}_id": user_id,
-            f"{prefix}embedding__isnull": False,
-        }
+        user_queryset = likes_model.objects.filter(**{f"{user_field}_id": user_id})
+        vector = feed_class.calculate_user_embedding(user_queryset)
 
-        recent_emb = list(
-            likes_django_model.objects.filter(**filter_kwargs)
-            .order_by("-id")[:user_likes_limit]
-            .values_list(f"{prefix}embedding", flat=True)
+        UserFeedProfile.objects.update_or_create(
+            user_id=user_id, feed_id=feed_id, defaults={"embedding": vector or None}
         )
-
-        # Generate average vector using the configured encoder
-        encoder = app_settings.ENCODER_CLASS
-        vector = encoder.average_vectors(recent_emb, user_likes_limit)
-
-        # If vector is empty (user has 0 likes), we either clear the profile or set it to None
-        if not vector:
-            UserFeedProfile.objects.update_or_create(
-                user_id=user_id, feed_id=feed_id, defaults={"embedding": None}
-            )
-        else:  # If vector is not empty, we do main job
-            UserFeedProfile.objects.update_or_create(
-                user_id=user_id, feed_id=feed_id, defaults={"embedding": vector}
-            )
-
     except Exception as e:
-        logger.error(f"DNF Celery Error - user embedding generation failed: {e}")
+        logger.error(f"DNF Celery Error - User embedding generation failed: {e}")
+        raise e

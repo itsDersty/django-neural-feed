@@ -597,7 +597,7 @@ def test_run_synchronous_content_update_all_branches():
 
 
 def test_run_synchronous_user_update_falsy_vector():
-    """Covers line 232->239 branch when vector is empty or None."""
+    """Covers branch when vector is empty or None."""
     from django_neural_feed.signals import _run_synchronous_user_update
 
     mock_feed = MagicMock()
@@ -606,6 +606,10 @@ def test_run_synchronous_user_update_falsy_vector():
         "content_field_name": "content",
         "user_likes_limit": 3,
     }.get(key)
+
+    # Explicitly mock calculate_user_embedding to return None
+    # so the 'if not vector:' condition evaluates to True
+    mock_feed.calculate_user_embedding.return_value = None
 
     mock_model = MagicMock()
     mock_model.objects.filter.return_value.order_by.return_value.__getitem__.return_value.values_list.return_value = [
@@ -617,7 +621,7 @@ def test_run_synchronous_user_update_falsy_vector():
         patch("django_neural_feed.models.UserFeedProfile.objects") as mock_profile_objs,
     ):
 
-        # Force average_vectors to return None to bypass update_or_create block
+        # Keep this for backward compatibility if encoder is still called inside
         mock_settings.ENCODER_CLASS.average_vectors.return_value = None
 
         _run_synchronous_user_update(
@@ -626,7 +630,8 @@ def test_run_synchronous_user_update_falsy_vector():
             feed_class=mock_feed,
             feed_id="test_feed",
         )
-        # Ensure it explicitly saves None to database to wipe the profile
+
+        # Now it will explicitly check the branch and pass
         mock_profile_objs.update_or_create.assert_called_once_with(
             user_id=42, feed_id="test_feed", defaults={"embedding": None}
         )
@@ -654,4 +659,35 @@ def test_run_synchronous_content_update_empty_text():
         mock_settings.ENCODER_CLASS.text_to_vector.assert_not_called()
         mock_instance.save.assert_not_called()
         # Ensure connection.close() in finally block was still executed
+        mock_conn.close.assert_called_once()
+
+
+def test_run_synchronous_content_update_empty_vector():
+    """Covers line when text_to_vectorize is valid but vector returns empty."""
+    from django_neural_feed.signals import _run_synchronous_content_update
+    from unittest.mock import MagicMock, patch
+
+    mock_model = MagicMock()
+    mock_instance = MagicMock()
+
+    # Text exists but it might be whitespace-only
+    mock_instance.get_ready_text.return_value = "   "
+    mock_model.objects.get.return_value = mock_instance
+
+    with (
+        patch("django_neural_feed.signals.app_settings") as mock_settings,
+        patch("django_neural_feed.signals.connection") as mock_conn,
+    ):
+        # Mock encoder to return empty list (simulating failed/blank encode)
+        mock_encoder = MagicMock()
+        mock_encoder.text_to_vector.return_value = []
+        mock_settings.ENCODER_CLASS = mock_encoder
+
+        _run_synchronous_content_update(model_class=mock_model, instance_id=1)
+
+        # Ensure encoder was called but save was skipped due to empty vector
+        mock_encoder.text_to_vector.assert_called_once_with(
+            "   ", mock_settings.MODEL_NAME
+        )
+        mock_instance.save.assert_not_called()
         mock_conn.close.assert_called_once()

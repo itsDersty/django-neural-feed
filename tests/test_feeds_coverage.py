@@ -454,6 +454,7 @@ def test_get_feed_hnsw_garbage_and_excluded_queryset():
 
     # Execute feed generation with excluded_queryset parameter
     feed = EdgeCaseFeed.get_feed(user=user, excluded_queryset=excluded_qs)
+    feed2 = EdgeCaseFeed.get_feed(user=user, excluded_ids=excluded_qs)
 
     # Verify exclusion logic worked flawlessly
     feed_ids = [item.id for item in feed]

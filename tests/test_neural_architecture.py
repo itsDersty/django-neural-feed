@@ -44,8 +44,7 @@ def test_hnsw_fallback_when_user_passes_garbage():
 
         # Verify it falls back to default config keys cleanly
         assert hnsw_res["ENABLED"] is False
-        assert hnsw_res["M"] == 16
-        assert hnsw_res["EF_CONSTRUCTION"] == 64
+        assert hnsw_res["EF_SEARCH"] == 40
 
 
 @pytest.mark.django_db(transaction=True)

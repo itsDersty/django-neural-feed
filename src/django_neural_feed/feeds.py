@@ -70,7 +70,7 @@ class BaseNeuralFeed:
         prefix = f"{c_field}__" if c_field else ""
 
         filter_kwargs = {f"{prefix}embedding__isnull": False}
-        
+
         recent_emb = list(
             likes_queryset.filter(**filter_kwargs)
             .order_by("-id")[:limit]
@@ -241,14 +241,20 @@ class BaseNeuralFeed:
             hnsw and hnsw.get("enabled") and user_profile_vector is not None
         )
 
+        # Force evaluate exclusions into a flat set to prevent lazy subqueries breaking HNSW traversal
+        resolved_exclusions = set()
+        if excluded_queryset is not None:
+            resolved_exclusions.update(excluded_queryset.values_list("pk", flat=True))
+        if excluded_ids:
+            if hasattr(excluded_ids, "values_list"):
+                resolved_exclusions.update(excluded_ids.values_list("id", flat=True))
+            else:
+                resolved_exclusions.update(excluded_ids)
+
         candidates_qs = cls.get_candidates(user, queryset, None)
 
-        if excluded_queryset is not None:
-            candidates_qs = candidates_qs.exclude(
-                pk__in=excluded_queryset.values_list("pk", flat=True)
-            )
-        elif excluded_ids:
-            candidates_qs = candidates_qs.exclude(pk__in=excluded_ids)
+        if resolved_exclusions:
+            candidates_qs = candidates_qs.exclude(pk__in=resolved_exclusions)
 
         # multi-channel retrieval under HNSW mode
         if using_hnsw:
@@ -268,13 +274,21 @@ class BaseNeuralFeed:
 
             candidate_ids = set()
 
-            # simmilarity channel
+            # similarity channel
             if w_sim > 0:
                 with transaction.atomic(using=db_alias):
                     with connections[db_alias].cursor() as cursor:
                         cursor.execute("SET LOCAL hnsw.ef_search = %s;", [ef_search])
 
-                    knn_qs = candidates_qs.order_by(
+                    # Bypass heavy host app joins using target model manager
+                    base_model = cls.get_setting("content_django_model")
+                    clean_qs = base_model.objects.using(db_alias)
+
+                    # Apply evaluated python set to ensure HNSW optimization
+                    if resolved_exclusions:
+                        clean_qs = clean_qs.exclude(pk__in=resolved_exclusions)
+
+                    knn_qs = clean_qs.order_by(
                         MaxInnerProduct("embedding", user_profile_vector)
                     )[:pool_sim]
                     candidate_ids.update(knn_qs.values_list("id", flat=True))

@@ -18,9 +18,8 @@ DEFAULT_CONFIG = {
     "FEEDS": [],
     "HNSW": {
         "ENABLED": False,
-        "M": 16,  # Max connections per layer (default for pgvector)
-        "EF_CONSTRUCTION": 64,  # Size of the dynamic candidate list for construction
-        # "OP_CLASS": "inner_product",  # Index type (cosine, l2, or inner_product) |||| Reserved for future updates
+        "EF_SEARCH": 40,
+        "SEARCH_POOL": 500,
     },
 }
 

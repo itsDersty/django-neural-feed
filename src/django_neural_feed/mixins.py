@@ -1,5 +1,5 @@
 from django.db import models
-from pgvector.django import VectorField
+from pgvector.django import VectorField, HnswIndex
 from django_neural_feed.conf import app_settings
 
 
@@ -28,3 +28,22 @@ class NeuralRecommendMixin(models.Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._original_text = self.get_ready_text() if self.pk else None
+
+
+class NeuralHnswMixin:
+    """
+    Optional mixin to automatically provision a high-performance
+    HNSW index for the embedding field.
+    """
+
+    class Meta:
+        abstract = True
+        indexes = [
+            HnswIndex(
+                name="%(app_label)s_%(class)s_hnsw_idx",  # Dynamic safe naming
+                fields=["embedding"],
+                m=16,
+                ef_construction=64,
+                opclasses=["vector_ip_ops"],
+            )
+        ]
